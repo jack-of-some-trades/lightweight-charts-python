@@ -70,6 +70,10 @@ if (!window.Chart) {
                     if (this.commandFunctions[i](event)) break
                 }
             })
+
+            window.selectedChart = this
+            this.wrapper.addEventListener('mouseover', (e) => window.selectedChart = this)
+
             if (!autoSize) return
             window.addEventListener('resize', () => this.reSize())
         }
@@ -78,14 +82,20 @@ if (!window.Chart) {
             this.chart.resize(window.innerWidth * this.scale.width, (window.innerHeight * this.scale.height) - topBarOffset)
             this.wrapper.style.width = `${100 * this.scale.width}%`
             this.wrapper.style.height = `${100 * this.scale.height}%`
-            if (this.legend) {
-                if (this.scale.height === 0 || this.scale.width === 0) {
-                    this.legend.div.style.display = 'none'
-                }
-                else {
-                    this.legend.div.style.display = 'flex'
+
+            if (this.scale.height === 0 || this.scale.width === 0) {
+                this.legend.div.style.display = 'none'
+                if (this.toolBox) {
+                    this.toolBox.elem.style.display = 'none'
                 }
             }
+            else {
+                this.legend.div.style.display = 'flex'
+                if (this.toolBox) {
+                    this.toolBox.elem.style.display = 'flex'
+                }
+            }
+
 
         }
         makeCandlestickSeries() {
@@ -182,6 +192,9 @@ if (!window.Chart) {
 
     class Legend {
         constructor(chart) {
+            this.legendHandler = this.legendHandler.bind(this)
+
+            this.chart = chart
             this.ohlcEnabled = false
             this.percentEnabled = false
             this.linesEnabled = false
@@ -207,80 +220,12 @@ if (!window.Chart) {
 
             this.makeLines(chart)
 
-            let legendItemFormat = (num, decimal) => num.toFixed(decimal).toString().padStart(8, ' ')
-
-            let shorthandFormat = (num) => {
-                const absNum = Math.abs(num)
-                if (absNum >= 1000000) {
-                    return (num / 1000000).toFixed(1) + 'M';
-                } else if (absNum >= 1000) {
-                    return (num / 1000).toFixed(1) + 'K';
-                }
-                return num.toString().padStart(8, ' ');
-            }
-
-            chart.chart.subscribeCrosshairMove((param) => {
-                let options = chart.series.options()
-                if (!param.time) {
-                    this.candle.style.color = 'transparent'
-                    this.candle.innerHTML = this.candle.innerHTML.replace(options['upColor'], '').replace(options['downColor'], '')
-                    return
-                }
-                let data = param.seriesData.get(chart.series);
-                this.candle.style.color = ''
-                let str = '<span style="line-height: 1.8;">'
-                if (data) {
-                    if (this.ohlcEnabled) {
-                        str += `O ${legendItemFormat(data.open, chart.precision)} `
-                        str += `| H ${legendItemFormat(data.high, chart.precision)} `
-                        str += `| L ${legendItemFormat(data.low, chart.precision)} `
-                        str += `| C ${legendItemFormat(data.close, chart.precision)} `
-                    }
-
-                    if (this.percentEnabled) {
-                        let percentMove = ((data.close - data.open) / data.open) * 100
-                        let color = percentMove > 0 ? options['upColor'] : options['downColor']
-                        let percentStr = `${percentMove >= 0 ? '+' : ''}${percentMove.toFixed(2)} %`
-
-                        if (this.colorBasedOnCandle) {
-                            str += `| <span style="color: ${color};">${percentStr}</span>`
-                        }
-                        else {
-                            str += '| ' + percentStr
-                        }
-                    }
-                    let volumeData = param.seriesData.get(chart.volumeSeries)
-                    if (volumeData) {
-                        str += this.ohlcEnabled ? `<br>V ${shorthandFormat(volumeData.value)}` : ''
-                    }
-                }
-                this.candle.innerHTML = str + '</span>'
-
-                this.lines.forEach((line) => {
-                    if (!this.linesEnabled) {
-                        line.row.style.display = 'none'
-                        return
-                    }
-                    line.row.style.display = 'flex'
-                    if (!param.seriesData.get(line.line.series)) return
-                    let price = param.seriesData.get(line.line.series).value
-
-                    if (line.line.type === 'histogram') {
-                        price = shorthandFormat(price)
-                    }
-                    else {
-                        price = legendItemFormat(price, line.line.precision)
-                    }
-                    line.div.innerHTML = `<span style="color: ${line.solid};">▨</span>    ${line.line.name} : ${price}`
-                })
-
-
-            });
+            chart.chart.subscribeCrosshairMove(this.legendHandler)
         }
 
         toJSON() {
             // Exclude the chart attribute from serialization
-            const {lines, ...serialized} = this;
+            const {lines, chart, ...serialized} = this;
             return serialized;
         }
 
@@ -352,19 +297,113 @@ if (!window.Chart) {
                 solid: line.color.startsWith('rgba') ? line.color.replace(/[^,]+(?=\))/, '1') : line.color
             }
         }
+
+        legendItemFormat(num, decimal) { return num.toFixed(decimal).toString().padStart(8, ' ') }
+
+        shorthandFormat(num) {
+            const absNum = Math.abs(num)
+            if (absNum >= 1000000) {
+                return (num / 1000000).toFixed(1) + 'M';
+            } else if (absNum >= 1000) {
+                return (num / 1000).toFixed(1) + 'K';
+            }
+            return num.toString().padStart(8, ' ');
+        }
+
+        legendHandler(param, usingPoint= false) {
+            let options = this.chart.series.options()
+
+            if (!param.time) {
+                this.candle.style.color = 'transparent'
+                this.candle.innerHTML = this.candle.innerHTML.replace(options['upColor'], '').replace(options['downColor'], '')
+                return
+            }
+
+            let data, logical
+
+            if (usingPoint) {
+                let coordinate = this.chart.chart.timeScale().timeToCoordinate(param.time)
+                logical = this.chart.chart.timeScale().coordinateToLogical(coordinate)
+                data = this.chart.series.dataByIndex(logical)
+            }
+            else {
+                data = param.seriesData.get(this.chart.series);
+            }
+
+            this.candle.style.color = ''
+            let str = '<span style="line-height: 1.8;">'
+            if (data) {
+                if (this.ohlcEnabled) {
+                    str += `O ${this.legendItemFormat(data.open, this.chart.precision)} `
+                    str += `| H ${this.legendItemFormat(data.high, this.chart.precision)} `
+                    str += `| L ${this.legendItemFormat(data.low, this.chart.precision)} `
+                    str += `| C ${this.legendItemFormat(data.close, this.chart.precision)} `
+                }
+
+                if (this.percentEnabled) {
+                    let percentMove = ((data.close - data.open) / data.open) * 100
+                    let color = percentMove > 0 ? options['upColor'] : options['downColor']
+                    let percentStr = `${percentMove >= 0 ? '+' : ''}${percentMove.toFixed(2)} %`
+
+                    if (this.colorBasedOnCandle) {
+                        str += `| <span style="color: ${color};">${percentStr}</span>`
+                    } else {
+                        str += '| ' + percentStr
+                    }
+                }
+
+                let volumeData;
+                if (usingPoint) {
+                    volumeData = this.chart.volumeSeries.dataByIndex(logical)
+                }
+                else {
+                    volumeData = param.seriesData.get(this.chart.volumeSeries)
+                }
+                if (volumeData) {
+                    str += this.ohlcEnabled ? `<br>V ${this.shorthandFormat(volumeData.value)}` : ''
+                }
+            }
+            this.candle.innerHTML = str + '</span>'
+
+            this.lines.forEach((line) => {
+                if (!this.linesEnabled) {
+                    line.row.style.display = 'none'
+                    return
+                }
+                line.row.style.display = 'flex'
+
+                let price
+                if (usingPoint) {
+                    price = line.line.series.dataByIndex(logical)
+                }
+                else {
+                    price = param.seriesData.get(line.line.series)
+                }
+                if (!price) return
+                else price = price.value
+
+                if (line.line.type === 'histogram') {
+                    price = this.shorthandFormat(price)
+                } else {
+                    price = this.legendItemFormat(price, line.line.precision)
+                }
+                line.div.innerHTML = `<span style="color: ${line.solid};">▨</span>    ${line.line.name} : ${price}`
+            })
+        }
     }
 
     window.Legend = Legend
 }
 
-function syncCharts(childChart, parentChart) {
+function syncCharts(childChart, parentChart, crosshairOnly= false) {
 
-    function crosshairHandler(chart, series, point) {
+    function crosshairHandler(chart, point) {
         if (!point) {
-            chart.clearCrosshairPosition()
+            chart.chart.clearCrosshairPosition()
             return
         }
-        chart.setCrosshairPosition(point.value || point.close, point.time, series);
+        chart.chart.setCrosshairPosition(point.value || point.close, point.time, chart.series);
+        chart.legend.legendHandler(point, true)
     }
 
     function getPoint(series, param) {
@@ -372,14 +411,21 @@ function syncCharts(childChart, parentChart) {
 	    return param.seriesData.get(series) || null;
     }
 
-    let setChildRange = (timeRange) => childChart.chart.timeScale().setVisibleLogicalRange(timeRange)
-    let setParentRange = (timeRange) => parentChart.chart.timeScale().setVisibleLogicalRange(timeRange)
+    let setChildRange, setParentRange;
+    if (crosshairOnly) {
+        setChildRange = (timeRange) => { }
+        setParentRange = (timeRange) => { }
+    }
+    else {
+        setChildRange = (timeRange) => childChart.chart.timeScale().setVisibleLogicalRange(timeRange)
+        setParentRange = (timeRange) => parentChart.chart.timeScale().setVisibleLogicalRange(timeRange)
+    }
 
     let setParentCrosshair = (param) => {
-        crosshairHandler(parentChart.chart, parentChart.series, getPoint(childChart.series, param))
+        crosshairHandler(parentChart, getPoint(childChart.series, param))
     }
     let setChildCrosshair = (param) => {
-        crosshairHandler(childChart.chart, childChart.series, getPoint(parentChart.series, param))
+        crosshairHandler(childChart, getPoint(parentChart.series, param))
     }
 
     let selected = parentChart

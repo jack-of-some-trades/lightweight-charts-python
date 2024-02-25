@@ -71,7 +71,7 @@ if __name__ == '__main__':
 
     chart.show()
 
-    last_close = df1.iloc[-1]
+    last_close = df1.iloc[-1]['close']
     
     for i, series in df2.iterrows():
         chart.update(series)
@@ -100,7 +100,7 @@ if __name__ == '__main__':
     df1 = pd.read_csv('ohlc.csv')
     
     # Columns: time | price 
-    df2 = pd.read_csv('ticks.csv', parse_dates=['time'])
+    df2 = pd.read_csv('ticks.csv')
     
     chart = Chart()
     

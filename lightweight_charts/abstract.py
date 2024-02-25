@@ -2,7 +2,7 @@ import asyncio
 import os
 from base64 import b64decode
 from datetime import datetime
-from typing import Union, Literal, List
+from typing import Union, Literal, List, Optional
 import pandas as pd
 
 from .table import Table
@@ -98,13 +98,14 @@ class Window:
                      heading_background_colors, return_clicked_cells, func)
 
     def create_subchart(self, position: FLOAT = 'left', width: float = 0.5, height: float = 0.5,
-                        sync_id: str = None, scale_candles_only: bool = False, toolbox: bool = False
+                        sync_id: str = None, scale_candles_only: bool = False,
+                        sync_crosshairs_only: bool = False, toolbox: bool = False
                         ) -> 'AbstractChart':
         subchart = AbstractChart(self, width, height, scale_candles_only, toolbox, position=position)
         if not sync_id:
             return subchart
         self.run_script(f'''
-        syncCharts({subchart.id}, {sync_id})
+        syncCharts({subchart.id}, {sync_id}, {jbool(sync_crosshairs_only)})
         {subchart.id}.chart.timeScale().setVisibleLogicalRange(
             {sync_id}.chart.timeScale().getVisibleLogicalRange()
         )
@@ -210,7 +211,10 @@ class SeriesCommon(Pane):
 
     def _single_datetime_format(self, arg):
         if isinstance(arg, (str, int, float)) or not pd.api.types.is_datetime64_any_dtype(arg):
-            arg = pd.to_datetime(arg, unit='ms')
+            try:
+                arg = pd.to_datetime(arg, unit='ms')
+            except ValueError:
+                arg = pd.to_datetime(arg)
         arg = self._interval * (arg.timestamp() // self._interval)+self.offset
         return arg
 
@@ -246,6 +250,31 @@ class SeriesCommon(Pane):
             {self.id}.series.update({bar})
         ''')
         self.run_script(f'{self.id}.series.update({js_data(series)})')
+
+    def marker_list(self, markers: list):
+        """
+        Creates multiple markers.\n
+        :param markers: The list of markers to set. These should be in the format:\n
+        [
+            {"time": "2021-01-21", "position": "below", "shape": "circle", "color": "#2196F3", "text": ""},
+            {"time": "2021-01-22", "position": "below", "shape": "circle", "color": "#2196F3", "text": ""},
+            ...
+        ]
+        :return: a list of marker ids.
+        """
+        markers = markers.copy()
+        marker_ids = []
+        for i, marker in enumerate(markers):
+            markers[i]['time'] = self._single_datetime_format(markers[i]['time'])
+            markers[i]['position'] = marker_position(markers[i]['position'])
+            markers[i]['shape'] = marker_shape(markers[i]['shape'])
+            markers[i]['id'] = self.win._id_gen.generate()
+            marker_ids.append(markers[i]['id'])
+        self.run_script(f"""
+            {self.id}.markers.push(...{markers})
+            {self.id}.series.setMarkers({self.id}.markers)
+        """)
+        return marker_ids
 
     def marker(self, time: datetime = None, position: MARKER_POSITION = 'below',
                shape: MARKER_SHAPE = 'arrow_up', color: str = '#2196F3', text: str = ''
@@ -354,12 +383,15 @@ class SeriesCommon(Pane):
         ''')
 
     def vertical_span(self, start_time: Union[TIME, tuple, list], end_time: TIME = None,
-                      color: str = 'rgba(252, 219, 3, 0.2)'):
+                      color: str = 'rgba(252, 219, 3, 0.2)', round: bool = False):
         """
         Creates a vertical line or span across the chart.\n
         Start time and end time can be used together, or end_time can be
         omitted and a single time or a list of times can be passed to start_time.
         """
+        if round:
+            start_time = self._single_datetime_format(start_time)
+            end_time = self._single_datetime_format(end_time) if end_time else None
         return VerticalSpan(self, start_time, end_time, color)
 
 
@@ -587,7 +619,7 @@ class Candlestick(SeriesCommon):
                 {self.id}.chart.priceScale("right").applyOptions({{autoScale: true}})
         ''')
 
-    def update(self, series: pd.Series, _from_tick=False):
+    def update(self, series: pd.Series, render_drawings=False, _from_tick=False):
         """
         Updates the data from a bar;
         if series['time'] is the same time as the last bar, the last bar will be overwritten.\n
@@ -604,7 +636,10 @@ class Candlestick(SeriesCommon):
             if (stampToDate(lastBar({self.id}.data).time).getTime() === stampToDate({series['time']}).getTime()) {{
                 {self.id}.data[{self.id}.data.length-1] = {bar}
             }}
-            else {self.id}.data.push({bar})
+            else {{
+                {self.id}.data.push({bar})
+                {f'{self.id}.toolBox.renderDrawings()' if render_drawings else ''}
+            }}
             {self.id}.series.update({bar})
         ''')
         if 'volume' not in series:
@@ -625,7 +660,7 @@ class Candlestick(SeriesCommon):
                 f'Trying to update tick of time "{pd.to_datetime(series["time"])}", '
                 f'which occurs before the last bar time of '
                 f'"{pd.to_datetime(self._last_bar["time"])}".')
-        bar = pd.Series()
+        bar = pd.Series(dtype='float64')
         if series['time'] == self._last_bar['time']:
             bar = self._last_bar
             bar['high'] = max(self._last_bar['high'], series['price'])
@@ -645,19 +680,25 @@ class Candlestick(SeriesCommon):
         self.update(bar, _from_tick=True)
 
     def price_scale(
-            self, mode: PRICE_SCALE_MODE = 'normal', align_labels: bool = True, border_visible: bool = False,
-            border_color: str = None, text_color: str = None, entire_text_only: bool = False,
-            ticks_visible: bool = False, scale_margin_top: float = 0.2, scale_margin_bottom: float = 0.2):
+        self, auto_scale: bool = True, mode: PRICE_SCALE_MODE = 'normal', invert_scale: bool = False,
+            align_labels: bool = True, scale_margin_top: float = 0.2, scale_margin_bottom: float = 0.2,
+            border_visible: bool = False, border_color: Optional[str] = None, text_color: Optional[str] = None,
+            entire_text_only: bool = False, visible: bool = True, ticks_visible: bool = False, minimum_width: int = 0
+        ):
         self.run_script(f'''
             {self.id}.series.priceScale().applyOptions({{
+                autoScale: {jbool(auto_scale)},
                 mode: {price_scale_mode(mode)},
+                invertScale: {jbool(invert_scale)},
                 alignLabels: {jbool(align_labels)},
+                scaleMargins: {{top: {scale_margin_top}, bottom: {scale_margin_bottom}}},
                 borderVisible: {jbool(border_visible)},
                 {f'borderColor: "{border_color}",' if border_color else ''}
                 {f'textColor: "{text_color}",' if text_color else ''}
                 entireTextOnly: {jbool(entire_text_only)},
+                visible: {jbool(visible)},
                 ticksVisible: {jbool(ticks_visible)},
-                scaleMargins: {{top: {scale_margin_top}, bottom: {scale_margin_bottom}}}
+                minimumWidth: {minimum_width}
             }})''')
 
     def candle_style(
@@ -949,7 +990,6 @@ class AbstractChart(Candlestick, Pane):
 
             self.run_script(f'''
                     {self.id}.commandFunctions.unshift((event) => {{
-                        console.log(event.key)
                         if ({key_condition}) {{
                             event.preventDefault()
                             window.callbackFunction(`{modifier_key, keys}_~_{key}`)
@@ -982,7 +1022,9 @@ class AbstractChart(Candlestick, Pane):
 
     def create_subchart(self, position: FLOAT = 'left', width: float = 0.5, height: float = 0.5,
                         sync: Union[str, bool] = None, scale_candles_only: bool = False,
+                        sync_crosshairs_only: bool = False,
                         toolbox: bool = False) -> 'AbstractChart':
         if sync is True:
             sync = self.id
-        return self.win.create_subchart(position, width, height, sync, scale_candles_only, toolbox)
+        return self.win.create_subchart(position, width, height, sync,
+                                        scale_candles_only, sync_crosshairs_only, toolbox)

@@ -12,7 +12,6 @@ ___
 Sets the initial data for the chart.
 
 
-
 Columns should be named:
 : `time | open | high | low | close | volume`
 
@@ -28,7 +27,7 @@ ___
 
 
 
-```{py:method} update(series: pd.Series)
+```{py:method} update(series: pd.Series, render_drawings: bool = False)
 Updates the chart data from a bar.
 
 Series labels should be akin to [`set`](#AbstractChart.set).
@@ -106,7 +105,7 @@ ___
 
 
 
-```{py:method} vertical_span(start_time: TIME | list | tuple, end_time: TIME = None, color: COLOR = 'rgba(252, 219, 3, 0.2)')
+```{py:method} vertical_span(start_time: TIME | list | tuple, end_time: TIME = None, color: COLOR = 'rgba(252, 219, 3, 0.2)', round: bool = False)
 
 Creates and returns a `VerticalSpan` object.
 
@@ -151,6 +150,13 @@ When using multiple markers, they should be placed in chronological order or dis
 ```
 ___
 
+
+
+```{py:method} marker_list(markers: list) -> List[str]
+
+Creates multiple markers and returns a list of marker ids.
+
+```
 
 
 ```{py:method} remove_marker(marker_id: str)
@@ -206,7 +212,7 @@ ___
 
 
 
-```{py:method} price_scale(mode: PRICE_SCALE_MODE, align_labels: bool, border_visible: bool, border_color: COLOR, text_color: COLOR, entire_text_only: bool, ticks_visible: bool, scale_margin_top: float, scale_margin_bottom: float)
+```{py:method} price_scale(auto_scale: bool, mode: PRICE_SCALE_MODE, invert_scale: bool, align_labels: bool, scale_margin_top: float, scale_margin_bottom: float, border_visible: bool, border_color: COLOR, text_color: COLOR, entire_text_only: bool, visible: bool, ticks_visible: bool, minimum_width: float)
 
 Price scale options for the chart.
 ```
@@ -343,7 +349,7 @@ ___
 
 
 
-````{py:method} create_subchart(position: FLOAT, width: float, height: float, sync: bool | str, scale_candles_only: bool, toolbox: bool) -> AbstractChart 
+````{py:method} create_subchart(position: FLOAT, width: float, height: float, sync: bool | str, sync_crosshairs_only: bool, scale_candles_only: bool, toolbox: bool) -> AbstractChart 
 
 Creates and returns a Chart object, placing it adjacent to the previous Chart. This allows for the use of multiple chart panels within the same window.
 
@@ -355,6 +361,9 @@ Creates and returns a Chart object, placing it adjacent to the previous Chart. T
 
 `sync`
 : If given as `True`, the Subchart's timescale and crosshair will follow that of the declaring Chart. If a `str` is passed, the Chart will follow the panel with the given id.  Chart ids  can be accessed from the `chart.id` attribute. 
+
+`sync_crosshairs_only`
+: If given as `True`, only the crosshairs will be synced and movement will remain independant.
 
 ```{important}
 `width` and `height` should be given as a number between 0 and 1.
